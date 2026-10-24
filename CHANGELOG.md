@@ -13,6 +13,7 @@
 - Reload cue names every 30 seconds so renames appear without restarting the server.
 - Use 24-hour time and whole-second cue timers.
 - Fit the workspace title to the space beside the page controls.
+- Document why Keep Awake is unavailable on a remote plain-HTTP page.
 - Update the server dependencies, including dotenv 18. Electron packages are unchanged.
 
 ## 0.1.0

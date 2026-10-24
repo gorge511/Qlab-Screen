@@ -178,6 +178,16 @@ If you want the viewers page to show real remote client IPs, make sure your prox
 
 - The app tries to keep the device awake after user interaction where the browser allows it, but iOS still applies platform limits.
 
+## FAQ
+
+### Why does a remote computer say "Wake Lock Unsupported"?
+
+The monitor still works. Only the Keep Awake button is unavailable.
+
+Browsers expose the Wake Lock API on `localhost` and on HTTPS pages. They do not expose it for a page opened over plain HTTP by IP address, such as `http://192.168.x.x:3030`. On the computer running the server, `http://localhost:3030` is treated as a secure context, so Keep Awake can work there in Chrome.
+
+For a backstage display, turn off sleep in the computer or monitor system settings. That is more reliable during a show than the browser wake lock.
+
 ## Project Structure
 
 ```text
