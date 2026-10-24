@@ -46,7 +46,7 @@ function renderViewer(viewer) {
 
 function formatTime(value) {
   if (!value) return "-";
-  return new Date(value).toLocaleTimeString();
+  return new Date(value).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
 }
 
 function escapeHtml(value) {

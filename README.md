@@ -13,14 +13,16 @@ The app connects to QLab over TCP OSC, reads cue information, watches what is ru
    - workspace name as the main heading
    - cue order
    - running cues
-   - elapsed/remaining time where QLab exposes it
+   - elapsed/remaining time in whole seconds where QLab exposes it
    - current cue group
-   - automatic scrolling to the active cue
+   - QLab playhead when nothing is running
+   - cue type icons for audio, video, and other common cue types
+   - automatic scrolling to the running cue, or the playhead when nothing is running
    - mobile at-a-glance layout
    - QLab-inspired cue styling with larger group rows and cue color swatches
    - blank memo cues left blank instead of being labeled as untitled
 
-- TV dashboard view for full-screen display.
+- TV dashboard view for full-screen display, including the next two cues and a standby layout when nothing is running.
 - Live viewers page showing who is connected to the monitor and dashboard.
 - Lightweight browser updates:
 
@@ -57,11 +59,12 @@ Change these with environment variables before running in production.
 
 The main monitor is the operator-friendly page. It focuses on:
 
-- current workspace name
+- current workspace name, sized to remain fully visible beside the page controls
 - current cue group
 - running cues with live timing
-- full cue order
-- auto-scroll to the currently active cue
+- QLab playhead
+- full cue order, with the playhead highlighted
+- auto-scroll to the running cue, or to the playhead when nothing is running
 
 On smaller screens it switches to a compact mobile layout so the running cue and cue list stay visible without the title area taking over the page.
 
@@ -70,9 +73,12 @@ On smaller screens it switches to a compact mobile layout so the running cue and
 The TV dashboard is a simplified full-screen view for relay screens and confidence displays. It emphasizes:
 
 - current cue group
-- current active cue
-- progress/timing
-- running cue summary
+- current active cue, shown in green as "Now running"
+- progress and whole-second timing
+- the next two cues in the list, including the first cues inside a group when the playhead is on that group
+- a 24-hour clock showing the current time on the display computer
+
+When nothing is running, the dashboard switches to an amber "Next up" layout. It shows the QLab playhead instead of an empty progress bar, so actors can see which cue or group is standing by during a changeover.
 
 ### Live viewers
 

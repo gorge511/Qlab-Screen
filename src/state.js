@@ -9,6 +9,7 @@ export const state = {
   lastMessageAt: null,
   cues: [],
   running: [],
+  playheadId: "",
   time: {},
   polling: false
 };
@@ -29,6 +30,7 @@ export function setDisconnected(next = {}) {
     lastError: next.lastError || "",
     cues: [],
     running: [],
+    playheadId: "",
     time: {}
   });
   cuesVersion += 1;
@@ -56,6 +58,7 @@ export function publicStatePatch() {
   return {
     ...publicStateMeta(),
     running: state.running,
+    playheadId: state.playheadId,
     time: state.time,
     cuesVersion
   };

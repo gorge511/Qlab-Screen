@@ -1,13 +1,14 @@
 const tvConnection = document.querySelector("#tvConnection");
 const tvWorkspace = document.querySelector("#tvWorkspace");
 const tvClock = document.querySelector("#tvClock");
+const tvCueLabel = document.querySelector("#tvCueLabel");
 const tvGroup = document.querySelector("#tvGroup");
 const tvCueNumber = document.querySelector("#tvCueNumber");
 const tvCueName = document.querySelector("#tvCueName");
 const tvProgress = document.querySelector("#tvProgress");
 const tvElapsed = document.querySelector("#tvElapsed");
 const tvRemaining = document.querySelector("#tvRemaining");
-const tvRunningList = document.querySelector("#tvRunningList");
+const tvNextCues = document.querySelector("#tvNextCues");
 const tvFullscreenButton = document.querySelector("#tvFullscreenButton");
 const tvWakeLockButton = document.querySelector("#tvWakeLockButton");
 const tvWakeStateBadge = document.querySelector("#tvWakeStateBadge");
@@ -54,6 +55,7 @@ events.addEventListener("patch", (event) => {
   lastEventAt = Date.now();
   currentState = mergeStatePatch(currentState, JSON.parse(event.data));
   render();
+  if (currentState.connected && !currentState.cues?.length) ensureFullState();
 });
 
 events.addEventListener("heartbeat", (event) => {
@@ -62,6 +64,7 @@ events.addEventListener("heartbeat", (event) => {
   lastEventAt = Date.now();
   currentState = mergeStatePatch(currentState, JSON.parse(event.data));
   render();
+  if (currentState.connected && !currentState.cues?.length) ensureFullState();
 });
 
 events.onerror = () => {
@@ -93,10 +96,14 @@ function render() {
   document.body.classList.toggle("qlab-error", Boolean(serverOnline && currentState.lastError));
 
   const running = currentState.running || [];
-  const cueMap = new Map((currentState.cues || []).map((cue) => [cue.uniqueID, cue]));
+  const cues = currentState.cues || [];
+  const cueMap = new Map(cues.map((cue) => [cue.uniqueID, cue]));
   const primary = pickPrimaryCue(running, cueMap);
-  const fullCue = cueMap.get(primary?.uniqueID) || primary;
-  const group = findGroupName(fullCue, cueMap);
+  const standby = !primary;
+  const featured = primary || cueMap.get(currentState.playheadId) || null;
+  const fullCue = cueMap.get(featured?.uniqueID) || featured;
+  const playheadIsGroup = standby && (fullCue?.type === "Group" || fullCue?.type === "Cue List");
+  const group = playheadIsGroup ? getCueDisplayName(fullCue) : findGroupName(fullCue, cueMap);
   const timing = currentState.time?.[primary?.uniqueID] || {};
   const elapsed = Number(timing.actionElapsed || 0);
   const duration = Number(timing.duration || 0);
@@ -110,18 +117,29 @@ function render() {
   } else {
     tvConnection.textContent = currentState.connected ? "Connected" : currentState.lastError || "Disconnected";
   }
+  document.body.classList.toggle("standby", standby);
   tvVersionBadge.textContent = `v${currentState.appVersion || "0.0.0"}`;
   tvWorkspace.textContent = currentState.workspaceName || currentState.workspaceId || "-";
-  tvGroup.textContent = group || (running.length ? "Ungrouped cue" : "Waiting for QLab");
-  tvCueNumber.textContent = primary?.number || "-";
-  tvCueName.textContent = fullCue ? getCueDisplayName(fullCue) : "No cue running";
+  tvCueLabel.textContent = standby ? "Next up" : "Now running";
+  tvGroup.textContent = group || (standby ? "Waiting for QLab" : "Ungrouped cue");
+  tvCueNumber.textContent = fullCue?.number || "-";
+  tvCueName.innerHTML = playheadIsGroup
+    ? `${cueTypeIcon(fullCue.type)} ${escapeHtml(getCueDisplayName(fullCue))}`
+    : (fullCue
+      ? `${cueTypeIcon(fullCue.type)} ${escapeHtml(getCueDisplayName(fullCue))}`
+      : (standby ? "No cue standing by" : "No cue running"));
   tvProgress.style.width = `${progress}%`;
   tvElapsed.textContent = `${formatTime(elapsed)} elapsed`;
   tvRemaining.textContent = remaining == null ? "duration unavailable" : `${formatTime(remaining)} remaining`;
 
-  tvRunningList.innerHTML = running.length
-    ? running.map((cue) => `<div>${escapeHtml(cue.number || "-")} ${escapeHtml(getCueDisplayName(cue))}</div>`).join("")
-    : "Nothing running.";
+  const upcoming = nextCuesAfter(cues, fullCue, 2);
+  tvNextCues.innerHTML = upcoming.length
+    ? upcoming.map((cue) => {
+      const cueGroup = findGroupName(cue, cueMap);
+      const groupLabel = cueGroup && cueGroup !== group ? `<small>${escapeHtml(cueGroup)}</small>` : "";
+      return `<div class="tv-next-cue"><span>${escapeHtml(cue.number || "-")}</span><div>${cueTypeIcon(cue.type)} ${escapeHtml(getCueDisplayName(cue))}${groupLabel}</div></div>`;
+    }).join("")
+    : "Nothing next.";
 }
 
 async function toggleFullscreen() {
@@ -249,24 +267,64 @@ function mergeStatePatch(previousState, patch) {
   };
 }
 
+async function ensureFullState() {
+  try {
+    const response = await fetch("/api/state", { cache: "no-store" });
+    if (!response.ok) return;
+    currentState = await response.json();
+    render();
+  } catch {
+    // The next live update retries the full cue list.
+  }
+}
+
+function nextCuesAfter(cues, currentCue, count) {
+  if (!currentCue?.uniqueID) return [];
+  const isContainer = (cue) => cue.type === "Group" || cue.type === "Cue List";
+  if (isContainer(currentCue)) {
+    return cues.filter((cue) => cue.parentId === currentCue.uniqueID && !isContainer(cue)).slice(0, count);
+  }
+
+  const playable = cues.filter((cue) => !isContainer(cue));
+  const index = playable.findIndex((cue) => cue.uniqueID === currentCue.uniqueID);
+  if (index < 0) return [];
+  return playable.slice(index + 1, index + 1 + count);
+}
+
 function pickPrimaryCue(running, cueMap) {
-  const withFullCue = running.map((cue) => cueMap.get(cue.uniqueID) || cue);
-  return withFullCue.find((cue) => cue.type !== "Group" && cue.type !== "Cue List") || withFullCue[0] || null;
+  const playable = running
+    .map((cue) => cueMap.get(cue.uniqueID) || cue)
+    .filter((cue) => cue.type !== "Group" && cue.type !== "Cue List");
+  return playable.find((cue) => Number(currentState.time?.[cue.uniqueID]?.actionElapsed) > 0) || playable[0] || null;
 }
 
 function findGroupName(cue, cueMap) {
   if (!cue) return "";
-  if (cue.groupName) return cue.groupName;
-
-  let current = cue;
+  let current = cueMap.get(cue.uniqueID) || cue;
   while (current?.parentId) {
     const parent = cueMap.get(current.parentId);
     if (!parent) break;
-    if (parent.name || parent.number) return parent.name || parent.number;
+    if (parent.type === "Group") return parent.name || parent.number || "";
     current = parent;
   }
+  return cue.groupName || "";
+}
 
-  return cue.listName || "";
+function cueTypeIcon(type) {
+  const icons = {
+    Audio: "🔊",
+    Mic: "🎤",
+    Video: "🎞",
+    Camera: "📷",
+    Text: "T",
+    Group: "▣",
+    "Cue List": "≡",
+    Fade: "↘",
+    Wait: "⏳",
+    Memo: "✎"
+  };
+  const icon = icons[type];
+  return icon ? `<span class="cue-type-icon" title="${escapeHtml(type)}">${icon}</span>` : "";
 }
 
 function getCueDisplayName(cue) {
@@ -278,12 +336,11 @@ function getCueDisplayName(cue) {
 }
 
 function formatTime(seconds) {
-  if (seconds == null || Number.isNaN(Number(seconds))) return "--:--.-";
+  if (seconds == null || Number.isNaN(Number(seconds))) return "--:--";
   const value = Math.max(0, Number(seconds));
   const minutes = Math.floor(value / 60);
   const secs = Math.floor(value % 60);
-  const tenths = Math.floor((value % 1) * 10);
-  return `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}.${tenths}`;
+  return `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
 function escapeHtml(value) {
@@ -326,5 +383,5 @@ function sendPresence(visible) {
 }
 
 function updateClock() {
-  tvClock.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  tvClock.textContent = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 }

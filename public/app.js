@@ -6,6 +6,7 @@ const lastUpdate = document.querySelector("#lastUpdate");
 const cueCount = document.querySelector("#cueCount");
 const cueList = document.querySelector("#cueList");
 const runningList = document.querySelector("#runningList");
+const playheadCard = document.querySelector("#playheadCard");
 const mobileStatus = document.querySelector("#mobileStatus");
 const mobileLastUpdate = document.querySelector("#mobileLastUpdate");
 const mobileGroup = document.querySelector("#mobileGroup");
@@ -34,6 +35,7 @@ let wakeLock = null;
 let wakeLockWanted = false;
 let lastCueVersion = -1;
 let lastRunningIdsKey = "";
+let lastPlayheadId = "";
 let fullStateRequest = null;
 let lastFullStateFetchAt = 0;
 const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
@@ -84,6 +86,9 @@ cueList.addEventListener("scroll", () => {
   userScrolledAt = Date.now();
 }, { passive: true });
 
+fitWorkspaceTitle();
+window.addEventListener("resize", fitWorkspaceTitle);
+
 fullscreenButton.addEventListener("click", toggleFullscreen);
 wakeLockButton.addEventListener("click", toggleWakeLock);
 document.addEventListener("fullscreenchange", syncViewControls);
@@ -117,20 +122,22 @@ function render(state) {
     if (currentState.lastError) statusText.textContent = currentState.lastError;
   }
   workspaceHero.textContent = currentState.workspaceName || "Waiting for workspace";
+  fitWorkspaceTitle();
   versionBadge.textContent = `v${currentState.appVersion || "0.0.0"}`;
   const currentGroup = getCurrentGroup(currentState) || "-";
   workspaceText.textContent = currentGroup;
   runningCount.textContent = String((currentState.running || []).length);
-  const updateTime = currentState.lastMessageAt ? new Date(currentState.lastMessageAt).toLocaleTimeString() : "-";
+  const updateTime = currentState.lastMessageAt ? formatClock(currentState.lastMessageAt) : "-";
   lastUpdate.textContent = updateTime;
 
   cueCount.textContent = `${(currentState.cues || []).length} cues`;
-  renderCueList(runningIds, runningIdsKey);
+  renderCueList(runningIds, runningIdsKey, currentState.playheadId || "");
 
   runningList.classList.toggle("empty", !currentState.running?.length);
   runningList.innerHTML = currentState.running?.length
     ? currentState.running.map(renderRunningCue).join("")
     : "Nothing running.";
+  renderPlayhead(currentState);
 
   if (currentState.connected && !currentState.cues?.length) {
     ensureFullState();
@@ -140,18 +147,19 @@ function render(state) {
   requestAnimationFrame(() => scrollToActiveCue(currentState));
 }
 
-function renderCueList(runningIds, runningIdsKey) {
+function renderCueList(runningIds, runningIdsKey, playheadId) {
   const cues = currentState.cues || [];
   const cueVersion = Number(currentState.cuesVersion || 0);
-  if (cueVersion === lastCueVersion && runningIdsKey === lastRunningIdsKey) return;
+  if (cueVersion === lastCueVersion && runningIdsKey === lastRunningIdsKey && playheadId === lastPlayheadId) return;
 
   cueList.classList.toggle("empty", cues.length === 0);
   cueList.innerHTML = cues.length
-    ? cues.map((cue) => renderCue(cue, runningIds.has(cue.uniqueID))).join("")
+    ? cues.map((cue) => renderCue(cue, runningIds.has(cue.uniqueID), cue.uniqueID === playheadId)).join("")
     : "No cues loaded.";
 
   lastCueVersion = cueVersion;
   lastRunningIdsKey = runningIdsKey;
+  lastPlayheadId = playheadId;
 }
 
 async function toggleFullscreen() {
@@ -325,7 +333,24 @@ function mergeStatePatch(previousState, patch) {
   };
 }
 
-function renderCue(cue, isRunning) {
+function fitWorkspaceTitle() {
+  workspaceHero.style.fontSize = "";
+  const available = workspaceHero.clientWidth;
+  if (!available) return;
+
+  const fitted = Math.floor(available / Math.max(workspaceHero.textContent.length, 1) * 1.7);
+  const maxSize = Number.parseFloat(getComputedStyle(workspaceHero).fontSize);
+  workspaceHero.style.fontSize = `${Math.max(24, Math.min(maxSize, fitted))}px`;
+}
+
+function renderPlayhead(state) {
+  const cue = (state.cues || []).find((candidate) => candidate.uniqueID === state.playheadId);
+  playheadCard.innerHTML = cue
+    ? `<span>Playhead ${escapeHtml(cue.number || "-")}</span><strong>${cueTypeIcon(cue.type)} ${escapeHtml(getCueDisplayName(cue))}</strong>`
+    : "No playhead.";
+}
+
+function renderCue(cue, isRunning, isPlayhead = false) {
   const isDisabled = Number(cue.armed) === 0;
   const isGroup = cue.type === "Group" || cue.type === "Cue List";
   const displayName = getCueDisplayName(cue);
@@ -338,12 +363,12 @@ function renderCue(cue, isRunning) {
     ? `<div class="cue-live-time">${escapeHtml(formatTime(elapsed))}${remaining != null ? ` / ${escapeHtml(formatTime(remaining))}` : ""}</div>`
     : "";
   return `
-    <article class="cue-row ${isRunning ? "running" : ""} ${isDisabled ? "disabled" : ""} ${isGroup ? "group-row" : ""}" data-cue-id="${escapeHtml(cue.uniqueID)}" data-parent-id="${escapeHtml(cue.parentId || "")}" style="--depth:${Number(cue.depth || 0)}">
+    <article class="cue-row ${isRunning ? "running" : ""} ${isPlayhead ? "playhead" : ""} ${isDisabled ? "disabled" : ""} ${isGroup ? "group-row" : ""}" data-cue-id="${escapeHtml(cue.uniqueID)}" data-parent-id="${escapeHtml(cue.parentId || "")}" style="--depth:${Number(cue.depth || 0)}">
       <div class="cue-number">${escapeHtml(cue.number || "-")}</div>
       <div class="cue-title cue-indent">
         ${renderCueSwatch(cue)}
         <div class="cue-copy">
-          <div class="cue-name">${escapeHtml(displayName)}</div>
+          <div class="cue-name">${cueTypeIcon(cue.type)} ${escapeHtml(displayName)}</div>
           ${detail ? `<div class="cue-detail">${escapeHtml(detail)}</div>` : ""}
           ${liveTiming}
         </div>
@@ -353,18 +378,21 @@ function renderCue(cue, isRunning) {
         ${cue.flagged ? '<span class="badge warn">F</span>' : ""}
         ${isDisabled ? '<span class="badge danger">D</span>' : ""}
         ${isRunning ? '<span class="badge">RUN</span>' : ""}
+        ${isPlayhead ? '<span class="badge warn">PH</span>' : ""}
       </div>
     </article>
   `;
 }
 
 function scrollToActiveCue(state) {
-  if (!state?.cues?.length || !state.running?.length) return;
+  if (!state?.cues?.length) return;
   if (Date.now() - userScrolledAt < 5000) return;
 
   const cueMap = new Map(state.cues.map((cue) => [cue.uniqueID, cue]));
-  const primary = pickPrimaryCue(state.running, cueMap);
-  const targetCue = cueMap.get(primary?.uniqueID) || findParentInList(primary, cueMap);
+  const primary = pickPrimaryCue(state.running || [], cueMap);
+  const targetCue = primary
+    ? cueMap.get(primary.uniqueID) || findParentInList(primary, cueMap)
+    : cueMap.get(state.playheadId);
   if (!targetCue?.uniqueID || targetCue.uniqueID === lastScrollTarget) return;
 
   const row = cueList.querySelector(`[data-cue-id="${CSS.escape(targetCue.uniqueID)}"]`);
@@ -379,8 +407,10 @@ function scrollToActiveCue(state) {
 }
 
 function pickPrimaryCue(running, cueMap) {
-  const withFullCue = running.map((cue) => cueMap.get(cue.uniqueID) || cue);
-  return withFullCue.find((cue) => cue.type !== "Group" && cue.type !== "Cue List") || withFullCue[0] || null;
+  const playable = running
+    .map((cue) => cueMap.get(cue.uniqueID) || cue)
+    .filter((cue) => cue.type !== "Group" && cue.type !== "Cue List");
+  return playable.find((cue) => Number(currentState.time?.[cue.uniqueID]?.actionElapsed) > 0) || playable[0] || null;
 }
 
 function findParentInList(cue, cueMap) {
@@ -398,18 +428,15 @@ function getCurrentGroup(state) {
   const primary = pickPrimaryCue(state.running || [], cueMap);
   if (!primary) return "";
 
-  const fullCue = cueMap.get(primary.uniqueID) || primary;
-  if (fullCue.groupName) return fullCue.groupName;
-
-  let current = fullCue;
+  let current = cueMap.get(primary.uniqueID) || primary;
   while (current?.parentId) {
     const parent = cueMap.get(current.parentId);
     if (!parent) break;
-    if (parent.name || parent.number) return parent.name || parent.number;
+    if (parent.type === "Group") return parent.name || parent.number || "";
     current = parent;
   }
 
-  return fullCue.listName || "";
+  return current.groupName || "";
 }
 
 function renderRunningCue(cue) {
@@ -426,7 +453,7 @@ function renderRunningCue(cue) {
       <div class="run-top">
         <strong class="cue-number">${escapeHtml(cue.number || "-")}</strong>
         <div class="run-main">
-          <strong class="run-title">${escapeHtml(displayName)}</strong>
+          <strong class="run-title">${cueTypeIcon(cue.type)} ${escapeHtml(displayName)}</strong>
           ${detail ? `<div class="run-detail">${escapeHtml(detail)}</div>` : ""}
         </div>
         <span class="timer">${formatTime(elapsed)}</span>
@@ -440,13 +467,16 @@ function renderRunningCue(cue) {
   `;
 }
 
+function formatClock(value) {
+  return new Date(value).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+}
+
 function formatTime(seconds) {
-  if (seconds == null || Number.isNaN(Number(seconds))) return "--:--.-";
+  if (seconds == null || Number.isNaN(Number(seconds))) return "--:--";
   const value = Math.max(0, Number(seconds));
   const minutes = Math.floor(value / 60);
   const secs = Math.floor(value % 60);
-  const tenths = Math.floor((value % 1) * 10);
-  return `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}.${tenths}`;
+  return `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
 function getCueDisplayName(cue) {
@@ -463,6 +493,23 @@ function getCueDetail(cue) {
   if (cue.type === "Memo") return "";
   if (!cue.name && cue.listName && cue.listName !== cue.number) return cue.listName;
   return "";
+}
+
+function cueTypeIcon(type) {
+  const icons = {
+    Audio: "🔊",
+    Mic: "🎤",
+    Video: "🎞",
+    Camera: "📷",
+    Text: "T",
+    Group: "▣",
+    "Cue List": "≡",
+    Fade: "↘",
+    Wait: "⏳",
+    Memo: "✎"
+  };
+  const icon = icons[type];
+  return icon ? `<span class="cue-type-icon" title="${escapeHtml(type)}">${icon}</span>` : "";
 }
 
 function formatCueType(type) {

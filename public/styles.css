@@ -82,6 +82,13 @@ body.focus-mode .running-list {
 
 .hero-block {
   min-width: 0;
+  overflow: hidden;
+}
+
+.connection-panel h1 {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
 }
 
 .page-links {
@@ -303,6 +310,27 @@ button.secondary {
   overflow: auto;
 }
 
+.playhead-card {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.playhead-card strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 1.15rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playhead-card span {
+  color: var(--running);
+  font-weight: 800;
+}
+
 .cue-row,
 .run-card {
   border-bottom: 1px solid rgba(255, 255, 255, 0.14);
@@ -349,6 +377,15 @@ button.secondary {
   font-weight: 800;
 }
 
+.cue-type-icon {
+  display: inline-block;
+  min-width: 1.1em;
+  margin-right: 6px;
+  color: var(--muted);
+  font-size: 0.9em;
+  text-align: center;
+}
+
 .cue-swatch {
   width: 10px;
   height: 10px;
@@ -360,6 +397,14 @@ button.secondary {
 .cue-row.running {
   background: var(--running-soft);
   box-shadow: inset 4px 0 0 var(--running);
+}
+
+.cue-row.playhead {
+  box-shadow: inset 4px 0 0 var(--accent, #facc15);
+}
+
+.cue-row.playhead .cue-number {
+  color: var(--accent, #facc15);
 }
 
 .cue-row.running .cue-number,
@@ -752,9 +797,19 @@ legend {
   min-width: 0;
 }
 
+.tv-current h1,
+.tv-current .eyebrow {
+  color: var(--running);
+}
+
+.tv-body.standby .tv-current h1,
+.tv-body.standby .tv-current .eyebrow,
+.tv-body.standby .tv-cue-line span {
+  color: var(--warn);
+}
+
 .tv-current h1 {
   max-width: 95vw;
-  color: var(--running);
   font-size: clamp(4rem, 10vw, 11rem);
   line-height: 0.92;
   overflow-wrap: anywhere;
@@ -778,6 +833,11 @@ legend {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tv-body.standby .tv-progress,
+.tv-body.standby .tv-time {
+  display: none;
 }
 
 .tv-progress {
@@ -812,22 +872,41 @@ legend {
   color: var(--muted);
 }
 
-#tvRunningList {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  font-size: 1.1rem;
+.tv-next-cues {
+  display: grid;
+  gap: 8px;
 }
 
-#tvRunningList div {
-  max-width: 32vw;
+.tv-next-cue {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 16px;
+  align-items: baseline;
   overflow: hidden;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  color: var(--running);
+  color: var(--text);
+  font-size: clamp(1.6rem, 3vw, 3rem);
+  font-weight: 800;
+}
+
+.tv-next-cue div {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tv-next-cue small {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.55em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tv-next-cue span {
+  margin-right: 16px;
+  color: var(--running);
 }
 
 @media (max-width: 780px) {

@@ -1,6 +1,6 @@
 {
   "name": "qlab-screen",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A read-only QLab monitor for relay screens, backstage displays, and TV dashboards.",
   "author": "Thomas Dye",
   "private": true,
@@ -36,7 +36,7 @@
   },
   "dependencies": {
     "compression": "^1.8.1",
-    "dotenv": "^17.4.2",
+    "dotenv": "^18.0.9",
     "express": "^5.2.1",
     "helmet": "^8.1.0",
     "node-osc": "^11.4.0",
@@ -47,5 +47,10 @@
     "electron": "^39.2.6",
     "electron-builder": "^26.0.12",
     "nodemon": "^3.1.14"
+  },
+  "allowScripts": {
+    "electron@39.8.10": true,
+    "electron-winstaller@5.4.0": true,
+    "fsevents@2.3.3": true
   }
 }

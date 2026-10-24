@@ -1,12 +1,13 @@
 import net from "node:net";
 import { QLAB_TCP_PORT } from "./config.js";
-import { asArray, flattenCues } from "./cues.js";
+import { activeRunningCues, asArray, flattenCues } from "./cues.js";
 import { broadcastChanges, broadcastPatch, broadcastSnapshot } from "./events.js";
 import { decodeOsc, decodeSlip, encodeOsc, encodeSlip, parseData } from "./osc.js";
 import { markCuesIfChanged, setDisconnected, state } from "./state.js";
 
 const pending = new Map();
 let pollTimer = null;
+let cueRefreshTimer = null;
 let thumpTimer = null;
 let qlabSocket = null;
 let slipBuffer = Buffer.alloc(0);
@@ -46,6 +47,9 @@ export async function connectToQlab({ host, passcode = "", workspaceId = "" }) {
   await send(host, `/workspace/${state.workspaceId}/updates`, [1]);
   await refreshAll();
   pollTimer = setInterval(refreshAll, 1000);
+  // QLab does not send an update for every cue rename, so reload names on a
+  // short interval instead of waiting for the server to restart.
+  cueRefreshTimer = setInterval(() => refreshAll(true).catch(() => {}), 30000);
   thumpTimer = setInterval(() => send(host, `/workspace/${state.workspaceId}/thump`).catch(() => {}), 15000);
 }
 
@@ -75,7 +79,8 @@ export async function refreshAll(forceCues = false) {
       markCuesIfChanged(flattenCues(asArray(cueReply.data)), forceCues);
     }
 
-    state.running = flattenCues(asArray(runningReply.data));
+    state.running = activeRunningCues(flattenCues(asArray(runningReply.data)), state.cues);
+    state.playheadId = await loadPlayheadId();
     await refreshTiming();
     state.lastError = "";
   } catch (error) {
@@ -86,25 +91,55 @@ export async function refreshAll(forceCues = false) {
   }
 }
 
+async function loadPlayheadId() {
+  try {
+    const listReply = await query(state.host, `/workspace/${state.workspaceId}/currentCueListID`, [], 2500);
+    const listId = replyString(listReply.data);
+    if (!listId) return "";
+
+    const playheadReply = await query(
+      state.host,
+      `/workspace/${state.workspaceId}/cue_id/${listId}/playbackPositionID`,
+      [],
+      2500
+    );
+    const playheadId = replyString(playheadReply.data);
+    return playheadId.toLowerCase() === "none" ? "" : playheadId;
+  } catch {
+    return state.playheadId || "";
+  }
+}
+
+function replyString(value) {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") return value.uniqueID || value.playbackPositionID || "";
+  return value == null ? "" : String(value);
+}
+
 function refreshTiming() {
   const timing = {};
   const runningIds = state.running.map((cue) => cue.uniqueID).filter(Boolean);
 
   return Promise.all(runningIds.map(async (id) => {
     const base = `/workspace/${state.workspaceId}/cue_id/${id}`;
-    const fields = await Promise.allSettled([
-      query(state.host, `${base}/actionElapsed`, [], 1200),
-      query(state.host, `${base}/currentDuration`, [], 1200),
-      query(state.host, `${base}/duration`, [], 1200),
-      query(state.host, `${base}/isPaused`, [], 1200)
-    ]);
+    // QLab returns file length on the cue, but a playing cue's live action
+    // length on currentDuration. Read the live value first and keep the file
+    // length when QLab has not reported a positive live duration yet.
+    const fields = [];
+    for (const method of ["actionElapsed", "currentDuration", "duration", "isPaused"]) {
+      try {
+        fields.push({ status: "fulfilled", value: await query(state.host, `${base}/${method}`, [], 2500) });
+      } catch (error) {
+        fields.push({ status: "rejected", reason: error });
+      }
+    }
 
-    const currentDuration = settledNumber(fields[1]);
-    const duration = currentDuration > 0 ? currentDuration : settledNumber(fields[2]);
+    const currentDuration = positiveNumber(settledData(fields[1]));
+    const fileDuration = positiveNumber(settledData(fields[2]));
 
     timing[id] = {
-      actionElapsed: settledNumber(fields[0]),
-      duration,
+      actionElapsed: positiveNumber(settledData(fields[0])),
+      duration: currentDuration || fileDuration,
       paused: Boolean(Number(settledData(fields[3]) || 0))
     };
   })).then(() => {
@@ -116,15 +151,17 @@ function settledData(result) {
   return result.status === "fulfilled" ? result.value.data : null;
 }
 
-function settledNumber(result) {
-  const value = Number(settledData(result));
-  return Number.isFinite(value) ? value : 0;
+function positiveNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
 function clearTimers() {
   clearInterval(pollTimer);
+  clearInterval(cueRefreshTimer);
   clearInterval(thumpTimer);
   pollTimer = null;
+  cueRefreshTimer = null;
   thumpTimer = null;
 }
 
@@ -141,18 +178,40 @@ function pickWorkspace(workspaces, requestedId) {
 
 function query(host, address, args = [], timeoutMs = 2500) {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      pending.delete(address);
-      reject(new Error(`Timed out waiting for QLab reply to ${address}`));
-    }, timeoutMs);
+    const waiter = {
+      address,
+      resolve,
+      reject,
+      timeout: setTimeout(() => {
+        removePending(waiter);
+        reject(new Error(`Timed out waiting for QLab reply to ${address}`));
+      }, timeoutMs)
+    };
 
-    pending.set(address, { resolve, reject, timeout });
+    for (const key of replyKeys(address)) {
+      const waiters = pending.get(key) || [];
+      waiters.push(waiter);
+      pending.set(key, waiters);
+    }
+
     send(host, address, args).catch((error) => {
-      clearTimeout(timeout);
-      pending.delete(address);
+      clearTimeout(waiter.timeout);
+      removePending(waiter);
       reject(error);
     });
   });
+}
+
+function replyKeys(address) {
+  return [address, `/reply${address}`];
+}
+
+function removePending(waiter) {
+  for (const [key, waiters] of pending.entries()) {
+    const remaining = waiters.filter((candidate) => candidate !== waiter);
+    if (remaining.length) pending.set(key, remaining);
+    else pending.delete(key);
+  }
 }
 
 function send(host, address, args = []) {
@@ -211,10 +270,11 @@ function closeQlabConnection() {
 }
 
 function rejectPending(message) {
-  for (const [address, waiter] of pending.entries()) {
+  const waiters = new Set([...pending.values()].flat());
+  pending.clear();
+  for (const waiter of waiters) {
     clearTimeout(waiter.timeout);
     waiter.reject(new Error(message));
-    pending.delete(address);
   }
 }
 
@@ -239,10 +299,11 @@ function handleTcpData(chunk) {
     const reply = normalizeReply(packet);
     if (!reply) continue;
 
-    const waiter = pending.get(reply.address);
+    const waiters = pending.get(reply.address);
+    const waiter = waiters?.[0];
     if (waiter) {
       clearTimeout(waiter.timeout);
-      pending.delete(reply.address);
+      removePending(waiter);
       waiter.resolve(reply);
     }
   }
@@ -266,13 +327,15 @@ function normalizeReply(packet) {
   if (packet.address.startsWith("/reply/")) {
     const address = packet.address.slice("/reply".length);
     const body = parseData(packet.args[0]);
-    if (body && typeof body === "object" && !Array.isArray(body)) {
+    if (body && typeof body === "object" && !Array.isArray(body) && "data" in body) {
       return {
         address: body.address || address,
         status: body.status || "ok",
         data: body.data
       };
     }
+    // QLab TCP replies use /reply + the requested address and put the value
+    // directly in the first argument, for example "12.4" or "ok".
     return { address, status: "ok", data: body };
   }
 
